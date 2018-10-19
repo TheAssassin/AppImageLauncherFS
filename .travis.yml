@@ -5,8 +5,8 @@ addons:
   apt:
     update: true
     packages:
-      libfuse2-dev
-      libboost-filesystem-dev
+      - libfuse2-dev
+      - libboost-filesystem-dev
 
 script:
   - travis/build-appimage.sh
