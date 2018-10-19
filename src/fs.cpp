@@ -1,4 +1,4 @@
- // system includes
+// system includes
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -8,6 +8,7 @@
 #include <vector>
 #include <string.h>
 #include <unistd.h>
+#include <utility>
 
 // library includes
 #include <boost/filesystem.hpp>
@@ -30,16 +31,80 @@ public:
     // mount point directory must be writable
     static constexpr int mountpointMode = 0750;
 
+    static const char registerMsg[];
+
+    // used for internal data management
+    class RegisteredAppImage {
+    private:
+        // store copy of assigned ID
+        // not really useful now, but might make a few things easier
+        int _id;
+        bf::path _path;
+        // open a file descriptor on the file on instantiation to keep files alive until the file is not needed any more
+        FILE* _fp;
+
+    private:
+        void openFile() {
+            _fp = fopen(_path.c_str(), "r");
+
+            if (_fp == nullptr)
+                throw CouldNotOpenFileError("");
+        }
+
+    public:
+        RegisteredAppImage() : _id(-1), _fp(nullptr) {};
+
+        RegisteredAppImage(const int id, bf::path path) : _id(id), _path(std::move(path)), _fp(nullptr) {
+            openFile();
+        }
+
+        ~RegisteredAppImage() {
+            if (_fp != nullptr)
+                fclose(_fp);
+            _fp = nullptr;
+        }
+
+//        RegisteredAppImage(const RegisteredAppImage& r) = delete;
+        RegisteredAppImage(const RegisteredAppImage& r) : _id(r._id), _path(r._path), _fp(nullptr) {
+            openFile();
+        };
+
+        RegisteredAppImage& operator=(const RegisteredAppImage& r) {
+            _id = r._id;
+            _path = r._path;
+            openFile();
+        }
+
+        bool operator==(const RegisteredAppImage& r) {
+            return _id == r._id && _path == r._path;
+        }
+
+    public:
+        bf::path path() const {
+            return _path;
+        }
+
+        int id() const {
+            return _id;
+        }
+
+        FILE* fp() {
+            return _fp;
+        }
+    };
+
+    typedef std::map<int, RegisteredAppImage> registered_appimages_t;
+
     // holds registered AppImages
     // they're indexed by a monotonically increasing counter, IDs may be added or removed at any time, therefore using
     // a map
     // numerical IDs are surely less cryptic than any other sort of identifier
-    static std::map<int, bf::path> registeredAppImages;
+    static registered_appimages_t registeredAppImages;
     static int counter;
 
     // time of creation of the instance
     // used to display atimes/mtimes of associated directories and the mountpoint
-    static const int timeOfCreation;
+    static const time_t timeOfCreation;
 
 public:
     PrivateData() {
@@ -56,14 +121,11 @@ public:
         auto applicationsDir = std::string(getenv("HOME")) + "/Applications";
         for (bf::directory_iterator it(applicationsDir); it != bf::directory_iterator(); ++it) {
             auto path = it->path();
-            auto filename = path.filename();
 
             if (!bf::is_regular_file(path))
                 continue;
 
-            // TODO: implement check whether file is an AppImage
-
-            registeredAppImages[counter++] = path;
+            registerAppImage(path);
         }
     }
 
@@ -85,7 +147,7 @@ private:
             auto filename = generateFilenameForId(entry.first);
 
             std::ostringstream line;
-            line << filename << " -> " << entry.second.string() << std::endl;
+            line << filename << " -> " << entry.second.path().string() << std::endl;
             auto lineStr = line.str();
 
             map.resize(map.size() + lineStr.size());
@@ -96,12 +158,38 @@ private:
     }
 
 public:
+    class CouldNotFindRegisteredAppImageError : public std::runtime_error {
+    public:
+        CouldNotFindRegisteredAppImageError() : runtime_error("") {};
+    };
+
     bool otherInstanceRunning() const {
         // TODO: implement properly (as in, check for stale mountpoint)
         return bf::is_directory(mountpoint);
     }
 
-    static bf::path mapPathToOriginalPath(const std::string& path) {
+    static int registerAppImage(const bf::path& path) {
+        if (!bf::exists(path))
+            throw FileNotFoundError();
+
+        // TODO: implement check whether file is an AppImage (i.e., if it is a regular file and contains the AppImage magic bytes)
+
+        // check whether file is registered already
+
+        for (const auto& r : registeredAppImages) {
+            if (path == r.second.path()) {
+                throw AppImageAlreadyRegisteredError(r.first);
+            }
+        }
+
+        const auto id = counter++;
+        registeredAppImages.emplace(id, RegisteredAppImage(id, path));
+
+        std::cout << "Registered new AppImage: " << path << " (ID: " << std::setfill('0') << std::setw(4) << id  << ")" << std::endl;
+        return id;
+    }
+
+    static RegisteredAppImage& mapPathToRegisteredAppImage(const std::string& path) {
         std::vector<char> mutablePath(path.size() + 1);
         strcpy(mutablePath.data(), path.c_str());
         auto mutablePathPtr = mutablePath.data();
@@ -114,13 +202,14 @@ public:
         try {
             id = std::stoi(firstPart);
         } catch (const std::invalid_argument&) {
-            return "";
+            throw CouldNotFindRegisteredAppImageError();
         }
 
         // check if filename matches the one we'd generate for parsed id
         // that'll make sure only the listed files in the used scheme are covered by this function
-        if (path != ("/" + generateFilenameForId(id)))
-            return "";
+        if (path != ("/" + generateFilenameForId(id))) {
+            throw CouldNotFindRegisteredAppImageError();
+        }
 
         return registeredAppImages[id];
     }
@@ -135,6 +224,7 @@ public:
             st->st_uid = getuid();
 
             st->st_mode = S_IFDIR | mode;
+            st->st_nlink = 2;
 
             return 0;
         }
@@ -147,6 +237,7 @@ public:
             st->st_uid = getuid();
 
             st->st_mode = S_IFREG | 0444;
+            st->st_nlink = 1;
 
             auto map = generateTextMap();
             st->st_size = map.size();
@@ -154,23 +245,49 @@ public:
             return 0;
         }
 
-        auto originalPath = mapPathToOriginalPath(path);
+        if (strcmp(path, "/register") == 0) {
+            st->st_atim = timespec{timeOfCreation, 0};
+            st->st_mtim = timespec{timeOfCreation, 0};
 
-        if (originalPath.empty() || !bf::is_regular_file(originalPath)) {
-            return -1;
+            st->st_gid = getgid();
+            st->st_uid = getuid();
+
+            st->st_mode = S_IFREG | 0660;
+            st->st_nlink = 1;
+
+            st->st_size = strlen(registerMsg);
+
+            return 0;
         }
 
-        stat(originalPath.c_str(), st);
+        try {
+            auto& registeredAppImage = mapPathToRegisteredAppImage(path);
 
-        // overwrite permissions: read-only executable
-        st->st_mode = S_IFREG | 0555;
-        return 0;
+            if (!bf::is_regular_file(registeredAppImage.path())) {
+                return -EIO;
+            }
+
+            if (stat(registeredAppImage.path().c_str(), st) != 0)
+                throw std::runtime_error("stat() failed");
+
+            // overwrite permissions: read-only executable
+            st->st_mode = S_IFREG | 0555;
+            st->st_nlink = 1;
+
+            return 0;
+        } catch (const CouldNotFindRegisteredAppImageError&) {
+            return -ENOENT;
+        }
     }
 
     static int readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
+        if (strcmp(path, "/") != 0)
+            return -ENOENT;
+
         filler(buf, ".", nullptr, 0);
         filler(buf, "..", nullptr, 0);
         filler(buf, "map", nullptr, 0);
+        filler(buf, "register", nullptr, 0);
 
         for (const auto& entry : PrivateData::registeredAppImages) {
             auto filename = generateFilenameForId(entry.first);
@@ -186,51 +303,119 @@ public:
 
             // cannot request more bytes than the file size
             if (offset > map.size())
-                return -1;
+                return -EIO;
 
-            int bytesToCopy = (int) std::min(bufsize, map.size() - offset);
-            memcpy(buf, map.data(), (size_t) bytesToCopy);
+            int bytesToCopy = static_cast<int>(std::min(bufsize, map.size()) - offset);
+            memcpy(buf, map.data() + offset, (size_t) bytesToCopy);
             return bytesToCopy;
         }
 
-        auto originalPath = mapPathToOriginalPath(path);
-        auto* f = fopen(originalPath.c_str(), "r");
-
-        if (f == nullptr)
-            return -1;
-
-        // fetch size of file for error treatment
-        ::fseek(f, 0, SEEK_END);
-        auto fullSize = ::ftell(f);
-        ::rewind(f);
-
-        // cannot request more bytes than the file size
-        if (offset > fullSize)
-            return -1;
-
-        ::fseek(f, offset, SEEK_SET);
-        auto bytesRead = ::fread(buf, sizeof(char), std::min((size_t) bufsize, (size_t) (fullSize - offset)), f);
-
-        // patch out magic bytes if necessary
-        constexpr auto magicBytesBegin = 8;
-        constexpr auto magicBytesEnd = 10;
-        if (offset <= magicBytesEnd) {
-            auto beg = magicBytesBegin - offset;
-            auto count = std::min(std::min((size_t) (magicBytesEnd - offset), (size_t) 2), bufsize) + 1;
-            memset(buf + beg, '\x00', count);
+        // shall be written to only
+        if (strcmp(path, "/register") == 0) {
+            const auto bytesToWrite = std::min(bufsize, strlen(registerMsg)) - offset;
+            memcpy(buf + offset, registerMsg, bytesToWrite);
+            return (int) bytesToWrite;
         }
 
-        if (::fclose(f) != 0)
-            return -1;
+        try {
+            auto& registeredAppImage = mapPathToRegisteredAppImage(path);
 
-        return static_cast<int>(bytesRead);
+            ::fseek(reinterpret_cast<FILE*>(fi->fh), offset, SEEK_SET);
+            auto bytesRead = ::fread(buf, sizeof(char), bufsize, reinterpret_cast<FILE*>(fi->fh));
+
+            // patch out magic bytes if necessary
+            constexpr auto magicBytesBegin = 8;
+            constexpr auto magicBytesEnd = 10;
+            if (offset <= magicBytesEnd) {
+                auto beg = magicBytesBegin - offset;
+                auto count = std::min(std::min((size_t) (magicBytesEnd - offset), (size_t) 2), bufsize) + 1;
+                memset(buf + beg, '\x00', count);
+            }
+
+            return static_cast<int>(bytesRead);
+        } catch (const CouldNotFindRegisteredAppImageError&) {
+            return -ENOENT;
+        }
+    }
+
+    static int open(const char* path, struct fuse_file_info* fi) {
+        // opening both files is permitted
+        if (strcmp(path, "/register") == 0) {
+            auto pathBuf = new std::vector<char>;
+            fi->fh = reinterpret_cast<uint64_t>(pathBuf);
+            return 0;
+        }
+
+        if (strcmp(path, "/map") == 0 && !(fi->flags & O_RDWR || fi->flags & O_WRONLY)) {
+            return 0;
+        }
+
+        // opening registered files is permitted as well...
+        try {
+            auto& registeredAppImage = mapPathToRegisteredAppImage(path);
+
+            // but only if they are opened read-only
+            // TODO: check open flags
+
+            // reuse stored fp for file I/O
+            fi->fh = reinterpret_cast<uint64_t>(registeredAppImage.fp());
+
+            return 0;
+        } catch (const CouldNotFindRegisteredAppImageError&) {
+            return -ENOENT;
+        }
+    }
+
+    static int write(const char* path, const char* buf, size_t bufsize, off_t offset, struct fuse_file_info* fi) {
+        if (strcmp(path, "/register") != 0)
+            return -ENOENT;
+
+        const std::string fragment(buf, bufsize);
+        auto* dataBuf = reinterpret_cast<std::vector<char>*>(fi->fh);
+
+        std::copy(fragment.begin(), fragment.end(), std::back_inserter(*dataBuf));
+
+        std::cout << fragment << std::flush;
+        return static_cast<int>(bufsize);
+    }
+
+    static int truncate(const char* path, off_t) {
+        // files doesn't needed to be truncated
+        if (strcmp(path, "/register") == 0)
+            return 0;
+
+        return -EPERM;
+    }
+
+    static int release(const char* path, struct fuse_file_info* fi) {
+        if (strcmp(path, "/register") == 0 && (fi->fh != 0)) {
+            auto* buf = reinterpret_cast<std::vector<char>*>(fi->fh);
+
+            std::string requestedPath(buf->data(), buf->size());
+
+            while (requestedPath.back() == '\n' || requestedPath.back() == '\r')
+                requestedPath.pop_back();
+
+            try {
+                registerAppImage(requestedPath);
+            } catch (const AppImageAlreadyRegisteredError& e) {
+                std::cout << "AppImage already registered: " << requestedPath << std::endl;
+            } catch (const AppImageLauncherFSError&) {
+                // ignore other errors
+            }
+
+            delete buf;
+            fi->fh = 0;
+        }
+
+        return 0;
     };
-
 };
 
 int AppImageLauncherFS::PrivateData::counter = 0;
-const int AppImageLauncherFS::PrivateData::timeOfCreation = time(NULL);
-std::map<int, bf::path> AppImageLauncherFS::PrivateData::registeredAppImages;
+const time_t AppImageLauncherFS::PrivateData::timeOfCreation = time(nullptr);
+AppImageLauncherFS::PrivateData::registered_appimages_t AppImageLauncherFS::PrivateData::registeredAppImages;
+const char AppImageLauncherFS::PrivateData::registerMsg[] = "Write paths to AppImages into this virtual file, one per line, to register them\n";
 
 AppImageLauncherFS::AppImageLauncherFS() : d(std::make_shared<PrivateData>()) {}
 
@@ -241,6 +426,10 @@ std::shared_ptr<struct fuse_operations> AppImageLauncherFS::operations() {
     ops->getattr = d->getattr;
     ops->read = d->read;
     ops->readdir = d->readdir;
+    ops->open = d->open;
+    ops->write = d->write;
+    ops->truncate = d->truncate;
+    ops->release = d->release;
 
     return ops;
 }
