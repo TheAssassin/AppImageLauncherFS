@@ -1,0 +1,24 @@
+language: cpp
+sudo: required
+
+addons:
+  apt:
+    update: true
+    packages:
+      libfuse2-dev
+      libboost-filesystem-dev
+
+script:
+  - travis/build-appimage.sh
+
+after_success:
+  - ls -lh
+  # make sure only pushes to master create a new release, otherwise pretend PR and upload to transfer.sh
+  - if [ "$TRAVIS_BRANCH" != "master" ]; then export TRAVIS_EVENT_TYPE=pull_request; fi
+  - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
+  - bash upload.sh AppImageLauncherFS*.AppImage*
+
+branches:
+  except:
+  - # Do not build tags that we create when we upload to GitHub Releases
+  - /^(?i:continuous)$/
