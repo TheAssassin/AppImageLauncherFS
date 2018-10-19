@@ -11,3 +11,8 @@ target_link_libraries(appimagelauncherfs PUBLIC libfuse Boost::filesystem)
 
 # ISO C++ spawns annoying warnings about string literals
 target_compile_options(appimagelauncherfs PRIVATE -Wno-write-strings)
+
+install(
+    TARGETS appimagelauncherfs
+    RUNTIME DESTINATION bin
+)
