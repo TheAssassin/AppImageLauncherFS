@@ -34,7 +34,7 @@ public:
 
     // returns a FUSE style list of operations that can be passed to fuse_main etc.
     // you should prefer using run()
-    std::shared_ptr<struct fuse_operations> operations();
+    std::shared_ptr<struct fuse_operations> operations() const;
 
     // runs filesystem with FUSE
     // returns exit code received from FUSE

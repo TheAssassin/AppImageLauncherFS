@@ -75,7 +75,7 @@ public:
             openFile();
         }
 
-        bool operator==(const RegisteredAppImage& r) {
+        bool operator==(const RegisteredAppImage& r) const {
             return _id == r._id && _path == r._path;
         }
 
@@ -88,7 +88,7 @@ public:
             return _id;
         }
 
-        FILE* fp() {
+        FILE* fp() const {
             return _fp;
         }
     };
@@ -414,14 +414,17 @@ public:
     };
 };
 
+// static members must be initialized out-of-source, which makes this a bit ugly
 int AppImageLauncherFS::PrivateData::counter = 0;
 const time_t AppImageLauncherFS::PrivateData::timeOfCreation = time(nullptr);
 AppImageLauncherFS::PrivateData::registered_appimages_t AppImageLauncherFS::PrivateData::registeredAppImages;
 const char AppImageLauncherFS::PrivateData::registerMsg[] = "Write paths to AppImages into this virtual file, one per line, to register them\n";
 
+// default constructor
 AppImageLauncherFS::AppImageLauncherFS() : d(std::make_shared<PrivateData>()) {}
 
-std::shared_ptr<struct fuse_operations> AppImageLauncherFS::operations() {
+//
+std::shared_ptr<struct fuse_operations> AppImageLauncherFS::operations() const {
     auto ops = std::make_shared<struct fuse_operations>();
 
     // available functionality
