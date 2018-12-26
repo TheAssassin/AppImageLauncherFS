@@ -342,14 +342,19 @@ public:
     }
 
     static int readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
+        // we only have the root dir, so any other path shall be rejected
         if (strcmp(path, "/") != 0)
             return -ENOENT;
 
+        // these entries must appear in every directory
         filler(buf, ".", nullptr, 0);
         filler(buf, "..", nullptr, 0);
+
+        // two virtual files provided by the filesystem process
         filler(buf, "map", nullptr, 0);
         filler(buf, "register", nullptr, 0);
 
+        // virtual entries mapping to the real registered AppImages
         for (const auto& entry : PrivateData::registeredAppImages) {
             auto filename = generateFilenameForId(entry.first);
             filler(buf, filename.c_str(), nullptr, 0);
