@@ -250,15 +250,27 @@ public:
         return id;
     }
 
+    /**
+     * Maps a FUSE filesystem path to a registered AppImage's path
+     * @param path path provided by FUSE (must begin with leading slash)
+     * @return path of AppImage mapping to this path
+     * @throws CouldNotFindRegisteredAppImageError if path doesn't refer to registered AppImage
+     * @throws std::invalid_argument if path is invalid
+     */
     static RegisteredAppImage& mapPathToRegisteredAppImage(const std::string& path) {
         std::vector<char> mutablePath(path.size() + 1);
         strcpy(mutablePath.data(), path.c_str());
         auto mutablePathPtr = mutablePath.data();
 
         char* firstPart = strsep(&mutablePathPtr, ".");
+
         // skip leading slash
+        if (firstPart[0] != '/')
+            throw InvalidPathError("Path doesn't begin with leading /");
+
         firstPart++;
 
+        // try to convert string ID to int
         int id;
         try {
             id = std::stoi(firstPart);
@@ -276,8 +288,18 @@ public:
     }
 
     static int getattr(const char* path, struct stat* st) {
-        // right now we only handle root
-        if (strcmp(path, "/") == 0) {
+        std::string strpath(path);
+
+        // there must be exactly one slash in every path only
+        if (std::count(strpath.begin(), strpath.end(), '/') != 1)
+            throw InvalidPathError("Path must contain exactly one /");
+
+        // path must start with said slash, it may not be in any other position
+        if (strpath.find('/') != 0)
+            throw InvalidPathError("Path does not start with /");
+
+        // root directory entry
+        if (strncmp(path, "/", 1) == 0) {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
 
@@ -290,6 +312,7 @@ public:
             return 0;
         }
 
+        // virtual read-only file generated on demand from the data stored by the fs
         if (strcmp(path, "/map") == 0) {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
@@ -306,6 +329,9 @@ public:
             return 0;
         }
 
+        // virtual readable and writable file
+        // on read, the file will return a static help message (hardcoded in the codebase)
+        // on write, it will interpret every line as a path of an AppImage that shall be registered
         if (strcmp(path, "/register") == 0) {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
@@ -321,6 +347,9 @@ public:
             return 0;
         }
 
+        // the only remaining entries might be registered AppImages, so let's try to find such an entry
+        // on success, we read the original file's metadata, alter it a bit (e.g., change permissions to read-only)
+        // if an entry cannot be found, we return an appropriate error code
         try {
             auto& registeredAppImage = mapPathToRegisteredAppImage(path);
 
@@ -339,6 +368,10 @@ public:
         } catch (const CouldNotFindRegisteredAppImageError&) {
             return -ENOENT;
         }
+
+        // return generic I/O error if we couldn't generate a better reply until this point
+        // (hint: this line _should_ be unreachable)
+        return -EIO;
     }
 
     static int readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info* fi) {
@@ -509,7 +542,7 @@ int AppImageLauncherFS::run() {
 
     // make sure mountpoint dir exists over lifetime of this object
     bf::create_directories(mp);
-    bf::permissions(mp, static_cast<bf::perms>(d->mountpointMode));
+    bf::permissions(mp, static_cast<bf::perms>(d->MOUNTPOINT_MODE));
 
     // we need a normal char pointer
     std::vector<char> mpBuf(mp.size() + 1, '\0');
