@@ -27,11 +27,11 @@ public:
 
     // registered AppImages are supposed to be executed only by the user and the group
     // furthermore, they must be read-only, as we don't implement any sort of writing (we don't need it)
-    static constexpr int mode = 0550;
+    static constexpr int DEFAULT_MODE = 0550;
     // mount point directory must be writable
-    static constexpr int mountpointMode = 0750;
+    static constexpr int MOUNTPOINT_MODE = 0750;
 
-    static const char registerMsg[];
+    static const char REGISTER_MSG[];
 
     // used for internal data management
     class RegisteredAppImage {
@@ -179,14 +179,14 @@ private:
     }
 
     static int handleWriteRegister(char* buf, size_t bufsize, off_t offset) {
-        const size_t bytesToWrite = std::min(bufsize, strlen(registerMsg)) - offset;
+        const size_t bytesToWrite = std::min(bufsize, strlen(REGISTER_MSG)) - offset;
 
         // prevent int wraparound (FUSE uses 32-bit ints for everything)
         if (bytesToWrite > INT32_MAX) {
             return -EIO;
         }
 
-        memcpy(buf + offset, registerMsg, bytesToWrite);
+        memcpy(buf + offset, REGISTER_MSG, bytesToWrite);
 
         return static_cast<int>(bytesToWrite);
     }
@@ -284,7 +284,7 @@ public:
             st->st_gid = getgid();
             st->st_uid = getuid();
 
-            st->st_mode = S_IFDIR | mode;
+            st->st_mode = S_IFDIR | DEFAULT_MODE;
             st->st_nlink = 2;
 
             return 0;
@@ -316,7 +316,7 @@ public:
             st->st_mode = S_IFREG | 0660;
             st->st_nlink = 1;
 
-            st->st_size = strlen(registerMsg);
+            st->st_size = strlen(REGISTER_MSG);
 
             return 0;
         }
@@ -468,7 +468,7 @@ public:
 int AppImageLauncherFS::PrivateData::counter = 0;
 const time_t AppImageLauncherFS::PrivateData::timeOfCreation = time(nullptr);
 AppImageLauncherFS::PrivateData::registered_appimages_t AppImageLauncherFS::PrivateData::registeredAppImages;
-const char AppImageLauncherFS::PrivateData::registerMsg[] = "Write paths to AppImages into this virtual file, one per line, to register them\n";
+const char AppImageLauncherFS::PrivateData::REGISTER_MSG[] = "Write paths to AppImages into this virtual file, one per line, to register them\n";
 
 // default constructor
 AppImageLauncherFS::AppImageLauncherFS() : d(std::make_shared<PrivateData>()) {}
