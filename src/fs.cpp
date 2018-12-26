@@ -299,7 +299,7 @@ public:
             throw InvalidPathError("Path does not start with /");
 
         // root directory entry
-        if (strncmp(path, "/", 1) == 0) {
+        if (strpath == "/") {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
 
@@ -313,7 +313,7 @@ public:
         }
 
         // virtual read-only file generated on demand from the data stored by the fs
-        if (strcmp(path, "/map") == 0) {
+        if (strpath == "/map") {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
 
@@ -332,7 +332,7 @@ public:
         // virtual readable and writable file
         // on read, the file will return a static help message (hardcoded in the codebase)
         // on write, it will interpret every line as a path of an AppImage that shall be registered
-        if (strcmp(path, "/register") == 0) {
+        if (strpath == "/register") {
             st->st_atim = timespec{timeOfCreation, 0};
             st->st_mtim = timespec{timeOfCreation, 0};
 
