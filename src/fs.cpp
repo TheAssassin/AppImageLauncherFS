@@ -159,6 +159,65 @@ private:
         return map.data();
     }
 
+    static int handleReadMap(void* buf, size_t bufsize, off_t offset) {
+        auto map = generateTextMap();
+
+        // cannot request more bytes than the file size
+        if (offset > map.size())
+            return -EIO;
+
+        size_t bytesToCopy = std::min(bufsize, map.size()) - offset;
+
+        // prevent int wraparound (FUSE uses 32-bit ints for everything)
+        if (bytesToCopy > INT32_MAX) {
+            return -EIO;
+        }
+
+        memcpy(buf, map.data() + offset, bytesToCopy);
+
+        return static_cast<int>(bytesToCopy);
+    }
+
+    static int handleWriteRegister(char* buf, size_t bufsize, off_t offset) {
+        const size_t bytesToWrite = std::min(bufsize, strlen(registerMsg)) - offset;
+
+        // prevent int wraparound (FUSE uses 32-bit ints for everything)
+        if (bytesToWrite > INT32_MAX) {
+            return -EIO;
+        }
+
+        memcpy(buf + offset, registerMsg, bytesToWrite);
+
+        return static_cast<int>(bytesToWrite);
+    }
+
+    static int handleReadRegisteredAppImage(char* buf, size_t bufsize, off_t offset, struct fuse_file_info* fi) {
+        // convert our file handle into a FILE* object once to save extra conversions in the rest of the code
+        FILE* fh = reinterpret_cast<FILE*>(fi->fh);
+
+        // seek to requested offset
+        ::fseek(fh, offset, SEEK_SET);
+
+        // read into buffer
+        size_t bytesRead = ::fread(buf, sizeof(char), bufsize, fh);
+
+        // prevent int wraparound (FUSE uses 32-bit ints for everything)
+        if (bytesRead > INT32_MAX) {
+            return -EIO;
+        }
+
+        // patch out (a.k.a. null) magic bytes (if necessary)
+        constexpr auto magicBytesBegin = 8;
+        constexpr auto magicBytesEnd = 10;
+        if (offset <= magicBytesEnd) {
+            auto beg = magicBytesBegin - offset;
+            auto count = std::min(std::min((size_t) (magicBytesEnd - offset), (size_t) 2), bufsize) + 1;
+            memset(buf + beg, '\x00', count);
+        }
+
+        return static_cast<int>(bytesRead);
+    }
+
 public:
     class CouldNotFindRegisteredAppImageError : public std::runtime_error {
     public:
@@ -301,43 +360,29 @@ public:
 
     static int read(const char* path, char* buf, size_t bufsize, off_t offset, struct fuse_file_info* fi) {
         if (strcmp(path, "/map") == 0) {
-            auto map = generateTextMap();
-
-            // cannot request more bytes than the file size
-            if (offset > map.size())
-                return -EIO;
-
-            int bytesToCopy = static_cast<int>(std::min(bufsize, map.size()) - offset);
-            memcpy(buf, map.data() + offset, (size_t) bytesToCopy);
-            return bytesToCopy;
+            return handleReadMap(buf, bufsize, offset);
         }
 
         // shall be written to only
+        // this is handled by getattr() already, but a bit more error checking doesn't hurt
         if (strcmp(path, "/register") == 0) {
-            const auto bytesToWrite = std::min(bufsize, strlen(registerMsg)) - offset;
-            memcpy(buf + offset, registerMsg, bytesToWrite);
-            return (int) bytesToWrite;
+            return handleWriteRegister(buf, bufsize, offset);
         }
 
+        // only left option is that the path refers to a registered AppImage
+        // in this case, we first check whether the path does resolve to a registered AppImage
         try {
             auto& registeredAppImage = mapPathToRegisteredAppImage(path);
 
-            ::fseek(reinterpret_cast<FILE*>(fi->fh), offset, SEEK_SET);
-            auto bytesRead = ::fread(buf, sizeof(char), bufsize, reinterpret_cast<FILE*>(fi->fh));
-
-            // patch out magic bytes if necessary
-            constexpr auto magicBytesBegin = 8;
-            constexpr auto magicBytesEnd = 10;
-            if (offset <= magicBytesEnd) {
-                auto beg = magicBytesBegin - offset;
-                auto count = std::min(std::min((size_t) (magicBytesEnd - offset), (size_t) 2), bufsize) + 1;
-                memset(buf + beg, '\x00', count);
-            }
-
-            return static_cast<int>(bytesRead);
+            return handleReadRegisteredAppImage(buf, bufsize, offset, fi);
         } catch (const CouldNotFindRegisteredAppImageError&) {
+            // must be an unknown file
             return -ENOENT;
         }
+
+        // return generic I/O error if we couldn't generate a better reply until this point
+        // (hint: this line _should_ be unreachable)
+        return -EIO;
     }
 
     static int open(const char* path, struct fuse_file_info* fi) {
