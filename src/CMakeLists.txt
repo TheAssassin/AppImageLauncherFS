@@ -16,6 +16,6 @@ target_link_libraries(appimagelauncherfs PUBLIC libfuse Boost::filesystem)
 target_compile_options(appimagelauncherfs PRIVATE -Wno-write-strings)
 
 install(
-    TARGETS appimagelauncherfs
+    TARGETS appimagelauncherfs COMPONENT APPIMAGELAUNCHERFS
     RUNTIME DESTINATION bin
 )
