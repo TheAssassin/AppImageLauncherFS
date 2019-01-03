@@ -7,6 +7,7 @@ if(NOT TARGET libfuse)
     find_package(FUSE REQUIRED)
 endif()
 
+set(Boost_USE_STATIC_LIBS ON)
 find_package(Boost REQUIRED COMPONENTS filesystem)
 
 add_executable(appimagelauncherfs main.cpp fs.cpp fs.h error.h)
