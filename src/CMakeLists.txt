@@ -3,7 +3,10 @@ add_definitions(-DFUSE_USE_VERSION=26)
 # required by FUSE
 add_definitions(-D_FILE_OFFSET_BITS=64)
 
-find_package(FUSE REQUIRED)
+if(NOT TARGET libfuse)
+    find_package(FUSE REQUIRED)
+endif()
+
 find_package(Boost REQUIRED COMPONENTS filesystem)
 
 add_executable(appimagelauncherfs main.cpp fs.cpp fs.h error.h)
