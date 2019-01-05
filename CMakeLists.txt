@@ -7,6 +7,8 @@ project(AppImageLauncherFS)
 
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 
+include(GNUInstallDirs)
+
 add_subdirectory(src)
 
 include(cmake/install.cmake)

@@ -4,7 +4,8 @@ configure_file(
     ${PROJECT_BINARY_DIR}/resources/appimagelauncherfs.service
     @ONLY
 )
+# caution: don't use ${CMAKE_INSTALL_LIBDIR} here, it's really just lib/systemd/user
 install(
     FILES ${PROJECT_BINARY_DIR}/resources/appimagelauncherfs.service
-    DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/systemd/user/ COMPONENT APPIMAGELAUNCHERFS
+    DESTINATION lib/systemd/user/ COMPONENT APPIMAGELAUNCHERFS
 )
